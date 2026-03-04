@@ -34,6 +34,20 @@ class GdbSessionConnectTests(unittest.TestCase):
         cmd = self.mock_ctrl.write.call_args[0][0]
         self.assertIn("extended-remote localhost:1234", cmd)
 
+    def test_connect_delayed_result(self):
+        """Result arrives in a later batch after initial console/notify output."""
+        self.mock_ctrl.write.return_value = [
+            {"type": "notify", "message": "thread-group-added", "payload": {"id": "i1"}},
+            {"type": "console", "message": None, "payload": "Reading symbols...\n"},
+        ]
+        self.mock_ctrl.get_gdb_response.return_value = [
+            {"type": "notify", "message": "stopped", "payload": {}},
+            {"type": "result", "message": "connected", "payload": {}},
+        ]
+        self.session.connect("localhost", 1234)
+        self.assertTrue(self.session.is_connected())
+        self.mock_ctrl.get_gdb_response.assert_called()
+
     def test_connect_error(self):
         self.mock_ctrl.write.return_value = [
             {"type": "result", "message": "error", "payload": {"msg": "Connection refused"}}

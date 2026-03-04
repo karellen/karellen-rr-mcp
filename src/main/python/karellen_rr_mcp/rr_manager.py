@@ -26,6 +26,20 @@ logger = logging.getLogger(__name__)
 DEFAULT_TRACE_BASE_DIR = os.path.expanduser("~/.local/share/rr")
 
 
+def _env_timeout(name, default):
+    """Read a timeout from environment variable, falling back to default."""
+    value = os.environ.get(name)
+    if value is not None:
+        try:
+            return int(value)
+        except ValueError:
+            logger.warning("Invalid value for %s: %r, using default %d", name, value, default)
+    return default
+
+
+TIMEOUT_STARTUP = _env_timeout("RR_MCP_TIMEOUT_STARTUP", 30)
+
+
 class RrError(Exception):
     pass
 
@@ -155,8 +169,12 @@ class ReplayServer:
     def trace_dir(self):
         return self._trace_dir
 
-    def start(self):
-        """Start rr replay gdbserver."""
+    def start(self, startup_timeout=TIMEOUT_STARTUP):
+        """Start rr replay gdbserver.
+
+        Args:
+            startup_timeout: Maximum seconds to wait for rr to start listening.
+        """
         cmd = ["rr", "replay", "-s", str(self._port), "-k"]
         if self._trace_dir:
             cmd.append(self._trace_dir)
@@ -167,11 +185,30 @@ class ReplayServer:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        # Give rr a moment to start
-        time.sleep(0.5)
-        if self._process.poll() is not None:
-            _, stderr = self._process.communicate()
-            raise RrError("rr replay failed to start: %s" % stderr.decode())
+        # Wait for rr to start listening on the port
+        deadline = time.monotonic() + startup_timeout
+        while time.monotonic() < deadline:
+            if self._process.poll() is not None:
+                _, stderr = self._process.communicate()
+                raise RrError("rr replay failed to start: %s" % stderr.decode())
+            if self._is_port_listening():
+                logger.info("rr replay server is listening on port %d", self._port)
+                return
+            time.sleep(0.5)
+        # Timed out — process is running but not listening
+        self.stop()
+        raise RrError("rr replay server did not start listening on port %d "
+                      "within %d seconds" % (self._port, startup_timeout))
+
+    def _is_port_listening(self):
+        """Check if the rr gdbserver port is accepting connections."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(0.5)
+                s.connect(("localhost", self._port))
+                return True
+        except (ConnectionRefusedError, OSError):
+            return False
 
     def stop(self):
         """Stop the replay server."""

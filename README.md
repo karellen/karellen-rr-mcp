@@ -276,6 +276,41 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 | `rr_checkpoint_save` | Save checkpoint at current position. |
 | `rr_checkpoint_restore` | Restore to saved checkpoint. |
 
+## Configuration
+
+### Timeouts
+
+All timeouts are configurable via environment variables (in seconds). Set them in your
+MCP server configuration:
+
+```json
+{
+  "mcpServers": {
+    "karellen-rr-mcp": {
+      "type": "stdio",
+      "command": "karellen-rr-mcp",
+      "env": {
+        "RR_MCP_TIMEOUT_FORWARD": "300",
+        "RR_MCP_TIMEOUT_REVERSE": "600"
+      }
+    }
+  }
+}
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `RR_MCP_TIMEOUT_STARTUP` | 30 | Waiting for rr gdbserver to start listening |
+| `RR_MCP_TIMEOUT_CONNECT` | 60 | GDB connecting to rr (includes symbol loading) |
+| `RR_MCP_TIMEOUT_FORWARD` | 120 | Forward execution (continue, step, next, finish) |
+| `RR_MCP_TIMEOUT_REVERSE` | 300 | Reverse execution |
+| `RR_MCP_TIMEOUT_BREAKPOINT` | 30 | Breakpoint/watchpoint operations |
+| `RR_MCP_TIMEOUT_EVAL` | 30 | State inspection (backtrace, evaluate, locals, etc.) |
+
+For large binaries (e.g. MariaDB, Firefox), you may need to increase `RR_MCP_TIMEOUT_CONNECT`
+(symbol loading can take 20+ seconds) and `RR_MCP_TIMEOUT_FORWARD` (replaying to a
+breakpoint deep in execution can take minutes).
+
 ## Troubleshooting
 
 ### AMD Zen CPUs

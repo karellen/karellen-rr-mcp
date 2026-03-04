@@ -157,7 +157,8 @@ class ReplayServerTests(unittest.TestCase):
         mock_popen.return_value = mock_proc
 
         server = ReplayServer(trace_dir="/traces/test-0", port=12345)
-        server.start()
+        with patch.object(server, "_is_port_listening", return_value=True):
+            server.start()
         self.assertTrue(server.is_running())
         mock_popen.assert_called_once()
         cmd = mock_popen.call_args[0][0]
@@ -177,6 +178,19 @@ class ReplayServerTests(unittest.TestCase):
         with self.assertRaises(RrError):
             server.start()
 
+    @patch("karellen_rr_mcp.rr_manager.subprocess.Popen")
+    @patch("karellen_rr_mcp.rr_manager.time.sleep")
+    def test_start_timeout(self, mock_sleep, mock_popen):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None  # still running but never listens
+        mock_popen.return_value = mock_proc
+
+        server = ReplayServer(trace_dir="/traces/test-0", port=12345)
+        with patch.object(server, "_is_port_listening", return_value=False):
+            with self.assertRaises(RrError) as ctx:
+                server.start(startup_timeout=1)
+        self.assertIn("did not start listening", str(ctx.exception))
+
     def test_stop_when_not_started(self):
         server = ReplayServer(trace_dir="/traces/test-0")
         server.stop()  # Should not raise
@@ -189,7 +203,8 @@ class ReplayServerTests(unittest.TestCase):
         mock_popen.return_value = mock_proc
 
         server = ReplayServer(trace_dir="/traces/test-0", port=12345)
-        server.start()
+        with patch.object(server, "_is_port_listening", return_value=True):
+            server.start()
         server.stop()
         mock_proc.terminate.assert_called_once()
         self.assertFalse(server.is_running())
@@ -204,6 +219,7 @@ class ReplayServerTests(unittest.TestCase):
         mock_popen.return_value = mock_proc
 
         server = ReplayServer(trace_dir="/traces/test-0", port=12345)
-        server.start()
+        with patch.object(server, "_is_port_listening", return_value=True):
+            server.start()
         server.stop()
         mock_proc.kill.assert_called_once()
