@@ -1,0 +1,192 @@
+#   -*- coding: utf-8 -*-
+#   Copyright 2026 Karellen, Inc.
+#
+#   Licensed under the Apache License, Version 2.0 (the "License");
+#   you may not use this file except in compliance with the License.
+#   You may obtain a copy of the License at
+#
+#       http://www.apache.org/licenses/LICENSE-2.0
+#
+#   Unless required by applicable law or agreed to in writing, software
+#   distributed under the License is distributed on an "AS IS" BASIS,
+#   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#   See the License for the specific language governing permissions and
+#   limitations under the License.
+
+"""rr record/replay subprocess lifecycle management."""
+
+import logging
+import os
+import socket
+import subprocess
+import time
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_TRACE_BASE_DIR = os.path.expanduser("~/.local/share/rr")
+
+
+class RrError(Exception):
+    pass
+
+
+def _find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
+def check_rr_available():
+    """Check if rr is installed and available on PATH."""
+    try:
+        result = subprocess.run(["rr", "--version"], capture_output=True, text=True,
+                                timeout=5)
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+    except subprocess.TimeoutExpired:
+        return False
+
+
+def check_perf_event_paranoid():
+    """Check if perf_event_paranoid is set to allow rr recording."""
+    try:
+        with open("/proc/sys/kernel/perf_event_paranoid", "r") as f:
+            value = int(f.read().strip())
+        return value <= 1
+    except (IOError, ValueError):
+        return False
+
+
+def record(command, working_directory=None, env=None):
+    """Record a command with rr. Returns the trace directory path.
+
+    Args:
+        command: Command to record (list of strings).
+        working_directory: Working directory for the recorded process.
+        env: Optional environment variables dict for the recorded process.
+    """
+    if not check_rr_available():
+        raise RrError("rr is not installed or not found on PATH")
+
+    if not check_perf_event_paranoid():
+        raise RrError("perf_event_paranoid is too high. "
+                      "Run: sudo sysctl kernel.perf_event_paranoid=1")
+
+    rr_cmd = ["rr", "record"] + list(command)
+    logger.info("Recording: %s", rr_cmd)
+
+    run_env = os.environ.copy()
+    if env:
+        run_env.update(env)
+
+    result = subprocess.run(
+        rr_cmd,
+        cwd=working_directory,
+        env=run_env,
+        capture_output=True,
+        text=True,
+    )
+
+    # rr writes the trace dir to stderr
+    trace_dir = _parse_trace_dir(result.stderr)
+    if trace_dir is None:
+        trace_dir = _find_latest_trace()
+
+    return trace_dir, result.returncode, result.stdout, result.stderr
+
+
+def _parse_trace_dir(stderr_output):
+    """Try to extract trace directory path from rr stderr output."""
+    for line in stderr_output.splitlines():
+        # rr typically outputs lines like: "rr: Saving execution to trace directory `...`."
+        if "trace directory" in line.lower() or "saving" in line.lower():
+            start = line.find("`")
+            end = line.find("`", start + 1) if start >= 0 else -1
+            if start >= 0 and end > start:
+                return line[start + 1:end]
+    return None
+
+
+def _find_latest_trace(base_dir=None):
+    """Find the most recently created trace directory."""
+    if base_dir is None:
+        base_dir = DEFAULT_TRACE_BASE_DIR
+    if not os.path.isdir(base_dir):
+        return None
+    entries = []
+    for entry in os.listdir(base_dir):
+        full_path = os.path.join(base_dir, entry)
+        if os.path.isdir(full_path):
+            entries.append((os.path.getmtime(full_path), full_path))
+    if not entries:
+        return None
+    entries.sort(reverse=True)
+    return entries[0][1]
+
+
+def list_recordings(trace_base_dir=None):
+    """List available rr trace recordings."""
+    if trace_base_dir is None:
+        trace_base_dir = DEFAULT_TRACE_BASE_DIR
+    if not os.path.isdir(trace_base_dir):
+        return []
+    recordings = []
+    for entry in sorted(os.listdir(trace_base_dir)):
+        full_path = os.path.join(trace_base_dir, entry)
+        if os.path.isdir(full_path):
+            recordings.append(full_path)
+    return recordings
+
+
+class ReplayServer:
+    """Manages rr replay gdbserver subprocess."""
+
+    def __init__(self, trace_dir=None, port=None):
+        self._trace_dir = trace_dir
+        self._port = port or _find_free_port()
+        self._process = None
+
+    @property
+    def port(self):
+        return self._port
+
+    @property
+    def trace_dir(self):
+        return self._trace_dir
+
+    def start(self):
+        """Start rr replay gdbserver."""
+        cmd = ["rr", "replay", "-s", str(self._port), "-k"]
+        if self._trace_dir:
+            cmd.append(self._trace_dir)
+
+        logger.info("Starting rr replay server: %s", cmd)
+        self._process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        # Give rr a moment to start
+        time.sleep(0.5)
+        if self._process.poll() is not None:
+            _, stderr = self._process.communicate()
+            raise RrError("rr replay failed to start: %s" % stderr.decode())
+
+    def stop(self):
+        """Stop the replay server."""
+        if self._process is not None:
+            logger.info("Stopping rr replay server")
+            try:
+                self._process.terminate()
+                self._process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._process.kill()
+                self._process.wait()
+            finally:
+                self._process = None
+
+    def is_running(self):
+        if self._process is None:
+            return False
+        return self._process.poll() is None
