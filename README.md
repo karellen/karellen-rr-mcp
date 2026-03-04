@@ -1,4 +1,4 @@
-# karellen-rr-mcp
+# MCP Server for rr Reverse Debugging (karellen-rr-mcp)
 
 [![Gitter](https://img.shields.io/gitter/room/karellen/lobby?logo=gitter)](https://gitter.im/karellen/Lobby)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/karellen/karellen-rr-mcp/build.yml?branch=master)](https://github.com/karellen/karellen-rr-mcp/actions/workflows/build.yml)
@@ -22,13 +22,57 @@ GDB/MI, inspecting program state without modifying source code.
 
 ## Requirements
 
-- Linux (rr only supports Linux)
-- [rr](https://rr-project.org/) installed and on PATH
-- Python >= 3.9
-- `perf_event_paranoid` set to allow recording (`<= 1`):
+- **Linux** on x86-64 (rr only supports Linux; aarch64 is experimental)
+- **[rr](https://rr-project.org/)** installed and on PATH
+- **[GDB](https://www.sourceware.org/gdb/)** installed and on PATH (used by rr for debugging)
+- **Python** >= 3.10
+- **`perf_event_paranoid`** set to allow recording (`<= 1`):
   ```bash
   sudo sysctl kernel.perf_event_paranoid=1
   ```
+
+### Installing rr and GDB
+
+**Fedora / RHEL / CentOS:**
+```bash
+sudo dnf install rr gdb
+```
+
+**Ubuntu / Debian:**
+```bash
+sudo apt install rr gdb
+```
+
+**Arch Linux:**
+```bash
+sudo pacman -S rr gdb
+```
+
+### Configuring perf_event_paranoid
+
+rr requires access to hardware performance counters. Set `perf_event_paranoid` to `1`
+or lower:
+
+```bash
+sudo sysctl kernel.perf_event_paranoid=1
+```
+
+To make this persistent across reboots:
+
+```bash
+echo 'kernel.perf_event_paranoid=1' | sudo tee /etc/sysctl.d/50-rr.conf
+```
+
+### Verify the setup
+
+```bash
+rr record /bin/true && echo "rr is working"
+```
+
+If this fails with a permissions error, check `perf_event_paranoid`. If it fails inside
+a container or VM, note that rr requires access to CPU performance counters — it does
+not work in most containers (Docker, Podman) or VMs unless hardware PMU passthrough is
+configured.
 
 ## Installation
 
