@@ -138,9 +138,10 @@ use them effectively, add the following to your project's `CLAUDE.md`:
 
 ### When to Use rr
 
-Run tests and code normally. When you encounter a crash, segfault, test failure, or bug
-that is hard to understand from the output alone, **re-run the failing command under rr
-recording** and then debug it:
+Run tests and code normally. When you encounter a crash, segfault, test failure, or bug,
+first check the relevant source code — if the fix is apparent without deep or broad
+searches, just fix it directly. But if the cause isn't obvious after an initial look,
+**switch to rr** rather than continuing to read through layers of code:
 
 ```
 rr_record(command=["make", "test"])
@@ -150,6 +151,11 @@ rr_record(command=["ctest", "--test-dir", "build"], working_directory="/path/to/
 
 Keep the record-replay-debug cycle going until all problems are resolved. rr captures
 the full execution deterministically, so the failure is replayed exactly as it happened.
+
+rr is not just for crashes and race conditions — use it for any bug where you would
+otherwise need to trace execution through multiple functions or files. Stepping through
+actual execution in the debugger is faster and more reliable than extensive static
+analysis.
 
 ### Debugging a SIGSEGV or Crash
 
@@ -187,9 +193,9 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 
 ### Key Principles
 
-- **Re-run under rr when stuck**: if a test fails or a program crashes and the cause
-  isn't obvious from the output, re-run with `rr_record` and debug the trace — don't
-  waste cycles adding printf statements
+- **Re-run under rr when the fix isn't obvious**: if a quick look at the source doesn't
+  reveal the cause, re-run with `rr_record` and debug the trace — don't waste cycles
+  on deep static analysis or adding printf statements
 - **Work backwards from symptoms**: go forward to where the bug manifests, then reverse
   to find the cause — this is the opposite of printf-debugging and far more efficient
 - **Watchpoints + reverse = root cause**: setting a watchpoint on a corrupted variable
