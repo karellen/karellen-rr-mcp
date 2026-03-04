@@ -166,6 +166,7 @@ searches, just fix it directly. But if the cause isn't obvious after an initial 
 rr_record(command=["make", "test"])
 rr_record(command=["./failing_test"])
 rr_record(command=["ctest", "--test-dir", "build"], working_directory="/path/to/project")
+rr_record(command=["./my_test"], trace_dir="/tmp/my-trace")
 ```
 
 Keep the record-replay-debug cycle going until all problems are resolved. rr captures
@@ -175,6 +176,22 @@ rr is not just for crashes and race conditions — use it for any bug where you 
 otherwise need to trace execution through multiple functions or files. Stepping through
 actual execution in the debugger is faster and more reliable than extensive static
 analysis.
+
+### Debugging Multi-Process Recordings
+
+When rr records a process that spawns children (e.g. a test harness that launches a
+server), all subprocesses are captured in the trace. By default, `rr_replay_start()`
+replays the root process. To debug a specific subprocess:
+
+1. **List processes**: `rr_ps(trace_dir="/path/to/trace")` — shows PID, PPID, exit code,
+   and command for every process in the recording
+2. **Start replay of a specific process**:
+   `rr_replay_start(trace_dir="/path/to/trace", pid=<pid>)` — replays only that
+   subprocess
+3. Debug as usual with breakpoints, reverse execution, etc.
+
+This is essential for debugging crashes in child processes (e.g. a database server
+launched by a test runner).
 
 ### Debugging a SIGSEGV or Crash
 
@@ -229,13 +246,17 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
   rr traces include full source-level information — function names, line numbers, local
   variables, and type info are all available during replay
 - **rr records the entire process tree**: child processes and threads are all captured,
-  so multi-process and multi-threaded bugs can be debugged deterministically
+  so multi-process and multi-threaded bugs can be debugged deterministically. Use
+  `rr_ps(trace_dir)` to list all processes in a recording and
+  `rr_replay_start(trace_dir, pid=<pid>)` to replay a specific subprocess
 - **Traces are deterministic**: replaying a trace always reproduces the exact same
   execution, including thread interleavings and signal delivery — race conditions and
   heisenbugs that are impossible to reproduce with printf become trivially repeatable
 - **Traces survive the session**: rr traces are stored in `~/.local/share/rr/` by default
   and persist across sessions. Use `rr_list_recordings()` to see available traces and
   `rr_replay_start(trace_dir="/path/to/trace")` to replay an older one
+- **Custom trace directories**: use `rr_record(command, trace_dir="/path/to/dir")` to
+  save recordings to a specific directory instead of the default `~/.local/share/rr/`
 - **Multiple replays from one recording**: a single trace can be replayed as many times
   as needed with different breakpoints and inspection strategies — no need to re-record
 - **Conditional breakpoints narrow the search**: use
@@ -261,6 +282,7 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 | `rr_replay_start` | Start replay session (launches rr gdbserver + GDB/MI). |
 | `rr_replay_stop` | Stop current replay session, clean up. |
 | `rr_list_recordings` | List available rr trace recordings. |
+| `rr_ps` | List processes in a trace recording (PID, PPID, exit code, command). |
 
 ### Breakpoints
 | Tool | Description |

@@ -62,3 +62,11 @@ class RecordingInfo:
     exit_code: Optional[int] = None
     events: Optional[int] = None
     creation_time: Optional[str] = None
+
+
+@dataclass
+class ProcessInfo:
+    pid: int
+    ppid: Optional[int] = None
+    exit_code: Optional[int] = None
+    cmd: Optional[str] = None
