@@ -21,6 +21,8 @@ import socket
 import subprocess
 import time
 
+from karellen_rr_mcp.types import ProcessInfo
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TRACE_BASE_DIR = os.path.expanduser("~/.local/share/rr")
@@ -72,13 +74,14 @@ def check_perf_event_paranoid():
         return False
 
 
-def record(command, working_directory=None, env=None):
+def record(command, working_directory=None, env=None, trace_dir=None):
     """Record a command with rr. Returns the trace directory path.
 
     Args:
         command: Command to record (list of strings).
         working_directory: Working directory for the recorded process.
         env: Optional environment variables dict for the recorded process.
+        trace_dir: Output trace directory. If omitted, rr uses its default.
     """
     if not check_rr_available():
         raise RrError("rr is not installed or not found on PATH")
@@ -87,7 +90,10 @@ def record(command, working_directory=None, env=None):
         raise RrError("perf_event_paranoid is too high. "
                       "Run: sudo sysctl kernel.perf_event_paranoid=1")
 
-    rr_cmd = ["rr", "record"] + list(command)
+    rr_cmd = ["rr", "record"]
+    if trace_dir:
+        rr_cmd.extend(["-o", trace_dir])
+    rr_cmd.extend(list(command))
     logger.info("Recording: %s", rr_cmd)
 
     run_env = os.environ.copy()
@@ -153,12 +159,60 @@ def list_recordings(trace_base_dir=None):
     return recordings
 
 
+def list_processes(trace_dir):
+    """List processes in an rr trace recording.
+
+    Args:
+        trace_dir: Path to rr trace directory.
+
+    Returns:
+        List of ProcessInfo objects.
+    """
+    if not check_rr_available():
+        raise RrError("rr is not installed or not found on PATH")
+
+    result = subprocess.run(
+        ["rr", "ps", trace_dir],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RrError("rr ps failed: %s" % result.stderr.strip())
+
+    return _parse_ps_output(result.stdout)
+
+
+def _parse_ps_output(stdout):
+    """Parse rr ps tab-separated output into ProcessInfo list."""
+    processes = []
+    for line in stdout.splitlines():
+        if not line.strip() or line.startswith("PID"):
+            continue
+        parts = line.split("\t", 3)
+        if len(parts) < 1:
+            continue
+        pid = int(parts[0])
+        ppid = None
+        if len(parts) > 1 and parts[1] != "--":
+            ppid = int(parts[1])
+        exit_code = None
+        if len(parts) > 2 and parts[2] != "--":
+            exit_code = int(parts[2])
+        cmd = parts[3] if len(parts) > 3 else None
+        processes.append(ProcessInfo(
+            pid=pid, ppid=ppid, exit_code=exit_code, cmd=cmd))
+    return processes
+
+
 class ReplayServer:
     """Manages rr replay gdbserver subprocess."""
 
-    def __init__(self, trace_dir=None, port=None):
+    def __init__(self, trace_dir=None, port=None, pid=None):
         self._trace_dir = trace_dir
         self._port = port or _find_free_port()
+        self._pid = pid
         self._process = None
 
     @property
@@ -176,6 +230,8 @@ class ReplayServer:
             startup_timeout: Maximum seconds to wait for rr to start listening.
         """
         cmd = ["rr", "replay", "-s", str(self._port), "-k"]
+        if self._pid is not None:
+            cmd.extend(["-p", str(self._pid)])
         if self._trace_dir:
             cmd.append(self._trace_dir)
 

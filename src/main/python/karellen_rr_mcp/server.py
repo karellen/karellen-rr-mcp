@@ -25,6 +25,7 @@ from karellen_rr_mcp.gdb_session import GdbSession, GdbSessionError
 from karellen_rr_mcp.rr_manager import (
     record as rr_record_cmd,
     list_recordings as rr_list,
+    list_processes as rr_ps_cmd,
     ReplayServer, RrError,
 )
 
@@ -113,17 +114,20 @@ def _format_frame(frame):
 
 @mcp.tool()
 def rr_record(command: list[str], working_directory: str = None,
-              env: dict[str, str] = None) -> str:
+              env: dict[str, str] = None,
+              trace_dir: str = None) -> str:
     """Record a command with rr. Returns trace directory path.
 
     Args:
         command: Command and arguments to record (e.g. ["./my_test"]).
         working_directory: Working directory for the recorded process.
         env: Optional extra environment variables for the recorded process.
+        trace_dir: Output trace directory. If omitted, rr uses its default (~/.local/share/rr/).
     """
     try:
         trace_dir, exit_code, stdout, stderr = rr_record_cmd(
-            command, working_directory=working_directory, env=env)
+            command, working_directory=working_directory, env=env,
+            trace_dir=trace_dir)
         parts = ["Recording complete."]
         if trace_dir:
             parts.append("Trace directory: %s" % trace_dir)
@@ -138,18 +142,19 @@ def rr_record(command: list[str], working_directory: str = None,
 
 
 @mcp.tool()
-def rr_replay_start(trace_dir: str = None) -> str:
+def rr_replay_start(trace_dir: str = None, pid: int = None) -> str:
     """Start a replay session. Launches rr gdbserver and connects GDB/MI.
 
     Args:
         trace_dir: Path to rr trace directory. If omitted, uses the latest trace.
+        pid: PID of a specific subprocess to replay. Use rr_ps to list available processes.
     """
     global _replay_server, _gdb_session
     try:
         if _gdb_session is not None:
             return "Error: A replay session is already active. Call rr_replay_stop first."
 
-        server = ReplayServer(trace_dir=trace_dir)
+        server = ReplayServer(trace_dir=trace_dir, pid=pid)
         server.start()
 
         session = GdbSession()
@@ -194,6 +199,28 @@ def rr_list_recordings(trace_base_dir: str = None) -> str:
     if not recordings:
         return "No recordings found."
     return "Available recordings:\n" + "\n".join("  - %s" % r for r in recordings)
+
+
+@mcp.tool()
+def rr_ps(trace_dir: str) -> str:
+    """List processes in an rr trace recording.
+
+    Args:
+        trace_dir: Path to rr trace directory.
+    """
+    try:
+        processes = rr_ps_cmd(trace_dir)
+        if not processes:
+            return "No processes found in recording."
+        lines = ["PID\tPPID\tEXIT\tCMD"]
+        for p in processes:
+            ppid = str(p.ppid) if p.ppid is not None else "--"
+            exit_code = str(p.exit_code) if p.exit_code is not None else "--"
+            cmd = p.cmd or ""
+            lines.append("%d\t%s\t%s\t%s" % (p.pid, ppid, exit_code, cmd))
+        return "\n".join(lines)
+    except RrError as e:
+        return "Error: %s" % e
 
 
 # --- Breakpoint Tools ---

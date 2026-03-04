@@ -18,7 +18,7 @@ from unittest.mock import patch, MagicMock
 
 from karellen_rr_mcp.gdb_session import GdbSessionError
 from karellen_rr_mcp.rr_manager import RrError
-from karellen_rr_mcp.types import Breakpoint, Frame, Variable, StopEvent
+from karellen_rr_mcp.types import Breakpoint, Frame, Variable, StopEvent, ProcessInfo
 import karellen_rr_mcp.server as server
 
 
@@ -197,6 +197,56 @@ class RrListRecordingsToolTests(unittest.TestCase):
         result = server.rr_list_recordings()
         self.assertIn("/traces/test-0", result)
         self.assertIn("/traces/test-1", result)
+
+
+class RrPsToolTests(unittest.TestCase):
+    @patch("karellen_rr_mcp.server.rr_ps_cmd")
+    def test_no_processes(self, mock_ps):
+        mock_ps.return_value = []
+        result = server.rr_ps("/traces/test-0")
+        self.assertIn("No processes", result)
+
+    @patch("karellen_rr_mcp.server.rr_ps_cmd")
+    def test_with_processes(self, mock_ps):
+        mock_ps.return_value = [
+            ProcessInfo(pid=100, ppid=None, exit_code=0, cmd="./test"),
+            ProcessInfo(pid=200, ppid=100, exit_code=-11, cmd="./child"),
+        ]
+        result = server.rr_ps("/traces/test-0")
+        self.assertIn("100", result)
+        self.assertIn("200", result)
+        self.assertIn("./test", result)
+        self.assertIn("./child", result)
+        self.assertIn("-11", result)
+
+    @patch("karellen_rr_mcp.server.rr_ps_cmd")
+    def test_error(self, mock_ps):
+        mock_ps.side_effect = RrError("rr ps failed")
+        result = server.rr_ps("/nonexistent")
+        self.assertIn("Error:", result)
+
+
+class RrReplayStartWithPidTests(unittest.TestCase):
+    def setUp(self):
+        server._gdb_session = None
+        server._replay_server = None
+
+    @patch("karellen_rr_mcp.server.GdbSession")
+    @patch("karellen_rr_mcp.server.ReplayServer")
+    def test_replay_start_with_pid(self, mock_replay_cls, mock_gdb_cls):
+        mock_server = MagicMock()
+        mock_server.port = 12345
+        mock_replay_cls.return_value = mock_server
+        mock_session = MagicMock()
+        mock_gdb_cls.return_value = mock_session
+
+        result = server.rr_replay_start("/traces/test-0", pid=820291)
+        self.assertIn("Replay session started", result)
+        mock_replay_cls.assert_called_once_with(trace_dir="/traces/test-0", pid=820291)
+
+    def tearDown(self):
+        server._gdb_session = None
+        server._replay_server = None
 
 
 class BreakpointToolTests(unittest.TestCase):

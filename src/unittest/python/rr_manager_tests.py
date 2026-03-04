@@ -18,8 +18,8 @@ from unittest.mock import patch, MagicMock
 
 from karellen_rr_mcp.rr_manager import (
     check_rr_available, check_perf_event_paranoid, record,
-    list_recordings, ReplayServer, RrError,
-    _parse_trace_dir, _find_latest_trace,
+    list_recordings, list_processes, ReplayServer, RrError,
+    _parse_trace_dir, _find_latest_trace, _parse_ps_output,
 )
 
 
@@ -223,3 +223,82 @@ class ReplayServerTests(unittest.TestCase):
             server.start()
         server.stop()
         mock_proc.kill.assert_called_once()
+
+    @patch("karellen_rr_mcp.rr_manager.subprocess.Popen")
+    @patch("karellen_rr_mcp.rr_manager.time.sleep")
+    def test_start_with_pid(self, mock_sleep, mock_popen):
+        mock_proc = MagicMock()
+        mock_proc.poll.return_value = None
+        mock_popen.return_value = mock_proc
+
+        server = ReplayServer(trace_dir="/traces/test-0", port=12345, pid=820291)
+        with patch.object(server, "_is_port_listening", return_value=True):
+            server.start()
+        cmd = mock_popen.call_args[0][0]
+        self.assertIn("-p", cmd)
+        pid_idx = cmd.index("-p")
+        self.assertEqual(cmd[pid_idx + 1], "820291")
+
+
+class ParsePsOutputTests(unittest.TestCase):
+    def test_parse_standard_output(self):
+        stdout = ("PID\tPPID\tEXIT\tCMD\n"
+                  "819999\t--\t1\t./mtr main.order_by\n"
+                  "820000\t819999\t0\t/bin/pwd\n")
+        result = _parse_ps_output(stdout)
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].pid, 819999)
+        self.assertIsNone(result[0].ppid)
+        self.assertEqual(result[0].exit_code, 1)
+        self.assertEqual(result[0].cmd, "./mtr main.order_by")
+        self.assertEqual(result[1].pid, 820000)
+        self.assertEqual(result[1].ppid, 819999)
+        self.assertEqual(result[1].exit_code, 0)
+        self.assertEqual(result[1].cmd, "/bin/pwd")
+
+    def test_parse_empty_output(self):
+        self.assertEqual(_parse_ps_output(""), [])
+
+    def test_parse_header_only(self):
+        self.assertEqual(_parse_ps_output("PID\tPPID\tEXIT\tCMD\n"), [])
+
+    def test_parse_negative_exit_code(self):
+        stdout = ("PID\tPPID\tEXIT\tCMD\n"
+                  "820291\t820290\t-11\t/usr/bin/mariadbd --defaults\n")
+        result = _parse_ps_output(stdout)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0].exit_code, -11)
+
+
+class ListProcessesTests(unittest.TestCase):
+    @patch("karellen_rr_mcp.rr_manager.check_rr_available", return_value=False)
+    def test_rr_not_available(self, mock_check):
+        with self.assertRaises(RrError):
+            list_processes("/traces/test-0")
+
+    @patch("karellen_rr_mcp.rr_manager.subprocess.run")
+    @patch("karellen_rr_mcp.rr_manager.check_rr_available", return_value=True)
+    def test_success(self, mock_check, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout="PID\tPPID\tEXIT\tCMD\n100\t--\t0\t./test\n200\t100\t0\t./child\n",
+            stderr="",
+        )
+        result = list_processes("/traces/test-0")
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0].pid, 100)
+        self.assertEqual(result[1].pid, 200)
+        mock_run.assert_called_once_with(
+            ["rr", "ps", "/traces/test-0"],
+            capture_output=True, text=True, timeout=30,
+        )
+
+    @patch("karellen_rr_mcp.rr_manager.subprocess.run")
+    @patch("karellen_rr_mcp.rr_manager.check_rr_available", return_value=True)
+    def test_failure(self, mock_check, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1, stdout="", stderr="No such trace",
+        )
+        with self.assertRaises(RrError) as ctx:
+            list_processes("/nonexistent")
+        self.assertIn("No such trace", str(ctx.exception))
