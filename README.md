@@ -46,25 +46,39 @@ pipx install karellen-rr-mcp
 
 ### Configure the MCP server
 
-Add to your Claude Code settings (`~/.claude/claude_code_config.json` for global,
-or `.claude/claude_code_config.json` for per-project):
+Using the CLI:
+
+```bash
+claude mcp add --transport stdio karellen-rr-mcp -- karellen-rr-mcp
+```
+
+Or manually add to `~/.claude.json` (user scope) or `.mcp.json` in your project root
+(project scope, shared via version control):
 
 ```json
 {
   "mcpServers": {
     "karellen-rr-mcp": {
+      "type": "stdio",
       "command": "karellen-rr-mcp"
     }
   }
 }
 ```
 
-If installed with pipx, use the full path:
+If installed with pipx:
+
+```bash
+claude mcp add --transport stdio karellen-rr-mcp -- pipx run karellen-rr-mcp
+```
+
+or manually:
 
 ```json
 {
   "mcpServers": {
     "karellen-rr-mcp": {
+      "type": "stdio",
       "command": "pipx",
       "args": ["run", "karellen-rr-mcp"]
     }
