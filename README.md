@@ -128,6 +128,25 @@ or manually:
 }
 ```
 
+### Auto-approve rr tools
+
+By default Claude Code will prompt for confirmation before each `rr_*` tool call. To
+auto-approve all tools from this server, add a permission rule to your user settings
+(`~/.claude/settings.json`):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__karellen-rr-mcp__*"
+    ]
+  }
+}
+```
+
+Or for a project-scoped setting, add the same rule to `.claude/settings.json` in your
+project root (this file can be committed to version control so all team members get it).
+
 ### Teach Claude the debugging workflow
 
 Claude will automatically discover all `rr_*` tools, but to teach it **when and how** to
