@@ -18,6 +18,7 @@
 import atexit
 import functools
 import logging
+import os
 import signal
 import traceback
 
@@ -73,8 +74,10 @@ atexit.register(_cleanup)
 
 def _handle_signal(signum, frame):
     _cleanup()
+    os._exit(0)
 
 
+signal.signal(signal.SIGINT, _handle_signal)
 signal.signal(signal.SIGTERM, _handle_signal)
 
 
@@ -492,5 +495,29 @@ def rr_checkpoint_restore(checkpoint_id: int) -> StopEvent:
     raise GdbSessionError("No stop event after checkpoint restore")
 
 
+def _watch_parent():
+    """Background thread: exit when parent process dies.
+
+    anyio.run() overrides SIGTERM handling, so os.kill(SIGTERM) would be
+    swallowed. Instead, call _cleanup() directly and use os._exit(0) to
+    force a clean exit that bypasses the blocked event loop.
+    """
+    import threading
+    import time
+
+    ppid = os.getppid()
+
+    def _monitor():
+        while True:
+            time.sleep(2)
+            if os.getppid() != ppid:
+                _cleanup()
+                os._exit(0)
+
+    t = threading.Thread(target=_monitor, daemon=True)
+    t.start()
+
+
 def main():
+    _watch_parent()
     mcp.run(transport="stdio")
