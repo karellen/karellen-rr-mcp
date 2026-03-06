@@ -181,17 +181,23 @@ analysis.
 
 When rr records a process that spawns children (e.g. a test harness that launches a
 server), all subprocesses are captured in the trace. By default, `rr_replay_start()`
-replays the root process. To debug a specific subprocess:
+replays the root process — which is typically the test harness (e.g. a shell, Python,
+Perl, or CTest wrapper), not the program you care about. **You must identify and select
+the correct subprocess.**
 
 1. **List processes**: `rr_ps(trace_dir="/path/to/trace")` — shows PID, PPID, exit code,
    and command for every process in the recording
-2. **Start replay of a specific process**:
+2. **Find the right process**: look for the actual program binary in the command column,
+   and use exit codes to identify the crashing process — negative exit codes indicate
+   signals (e.g. -11 = SIGSEGV, -6 = SIGABRT), non-zero codes indicate failures
+3. **Start replay of that process**:
    `rr_replay_start(trace_dir="/path/to/trace", pid=<pid>)` — replays only that
    subprocess
-3. Debug as usual with breakpoints, reverse execution, etc.
+4. Debug as usual with breakpoints, reverse execution, etc.
 
-This is essential for debugging crashes in child processes (e.g. a database server
-launched by a test runner).
+**Always use the `pid` parameter** when replaying test harness recordings. Without it,
+rr replays the harness process which lacks the program's debug symbols and is not where
+the bug occurred.
 
 ### Debugging a SIGSEGV or Crash
 
@@ -255,8 +261,15 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 - **Traces survive the session**: rr traces are stored in `~/.local/share/rr/` by default
   and persist across sessions. Use `rr_list_recordings()` to see available traces and
   `rr_replay_start(trace_dir="/path/to/trace")` to replay an older one
-- **Custom trace directories**: use `rr_record(command, trace_dir="/path/to/dir")` to
-  save recordings to a specific directory instead of the default `~/.local/share/rr/`
+- **Always use `trace_dir` with a random path in the project directory**: instead of
+  relying on the default `~/.local/share/rr/`, generate a random directory name within
+  the project working directory (e.g. `rr-trace-<random>`) and pass it as `trace_dir`
+  to `rr_record`. This avoids accumulating traces in the default location across
+  sessions, gives an explicit path for subsequent `rr_replay_start` / `rr_ps` calls
+  without needing `rr_list_recordings`, and keeps traces within Claude Code's default
+  permission scope for easy cleanup. **Important**: the directory must NOT already
+  exist — rr refuses to record into an existing directory. Generate the name but do not
+  create it. In the rare case of a name collision, generate a new name and retry
 - **Multiple replays from one recording**: a single trace can be replayed as many times
   as needed with different breakpoints and inspection strategies — no need to re-record
 - **Conditional breakpoints narrow the search**: use

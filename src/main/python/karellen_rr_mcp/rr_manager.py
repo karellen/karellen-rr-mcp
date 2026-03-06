@@ -108,10 +108,13 @@ def record(command, working_directory=None, env=None, trace_dir=None):
         text=True,
     )
 
-    # rr writes the trace dir to stderr
-    trace_dir = _parse_trace_dir(result.stderr)
-    if trace_dir is None:
-        trace_dir = _find_latest_trace()
+    # If trace_dir was explicitly provided, use it as-is (rr wrote there via -o).
+    # Otherwise, try to parse the trace directory from rr's stderr output,
+    # falling back to finding the latest trace in the default location.
+    if not trace_dir:
+        trace_dir = _parse_trace_dir(result.stderr)
+        if trace_dir is None:
+            trace_dir = _find_latest_trace()
 
     return trace_dir, result.returncode, result.stdout, result.stderr
 
