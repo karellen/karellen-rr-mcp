@@ -209,6 +209,51 @@ def _parse_ps_output(stdout):
     return processes
 
 
+def trace_info(trace_dir):
+    """Get trace header info in JSON format.
+
+    Args:
+        trace_dir: Path to rr trace directory.
+
+    Returns:
+        JSON string with trace metadata.
+    """
+    if not check_rr_available():
+        raise RrError("rr is not installed or not found on PATH")
+
+    result = subprocess.run(
+        ["rr", "traceinfo", trace_dir],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RrError("rr traceinfo failed: %s" % result.stderr.strip())
+
+    return result.stdout
+
+
+def remove_recording(trace_dir):
+    """Remove an rr trace recording.
+
+    Args:
+        trace_dir: Path to rr trace directory to remove.
+    """
+    if not check_rr_available():
+        raise RrError("rr is not installed or not found on PATH")
+
+    result = subprocess.run(
+        ["rr", "rm", trace_dir],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    if result.returncode != 0:
+        raise RrError("rr rm failed: %s" % result.stderr.strip())
+
+
 class ReplayServer:
     """Manages rr replay gdbserver subprocess."""
 

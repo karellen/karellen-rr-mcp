@@ -333,6 +333,96 @@ class GdbSessionCheckpointTests(unittest.TestCase):
         self.assertIsNotNone(result)
 
 
+class GdbSessionFrameTests(unittest.TestCase):
+    def setUp(self):
+        self.mock_ctrl = MagicMock()
+        self.session = GdbSession(gdb_controller=self.mock_ctrl)
+
+    def test_select_frame(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "done", "payload": {}}
+        ]
+        self.session.select_frame(2)
+        cmd = self.mock_ctrl.write.call_args[0][0]
+        self.assertIn("-stack-select-frame 2", cmd)
+
+    def test_select_frame_zero(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "done", "payload": {}}
+        ]
+        self.session.select_frame(0)
+        cmd = self.mock_ctrl.write.call_args[0][0]
+        self.assertIn("-stack-select-frame 0", cmd)
+
+    def test_select_frame_error(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "error", "payload": {"msg": "No stack"}}
+        ]
+        with self.assertRaises(GdbSessionError):
+            self.session.select_frame(99)
+
+
+class GdbSessionThreadTests(unittest.TestCase):
+    def setUp(self):
+        self.mock_ctrl = MagicMock()
+        self.session = GdbSession(gdb_controller=self.mock_ctrl)
+
+    def test_thread_info_all(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "done", "payload": {
+                "threads": [
+                    {"id": "1", "target-id": "Thread 1234.1234", "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x500", "func": "main"}},
+                    {"id": "2", "target-id": "Thread 1234.1235", "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x600", "func": "worker"}},
+                ],
+                "current-thread-id": "1",
+            }}
+        ]
+        threads = self.session.thread_info()
+        self.assertEqual(len(threads), 2)
+        self.assertEqual(threads[0].id, "1")
+        self.assertTrue(threads[0].current)
+        cmd = self.mock_ctrl.write.call_args[0][0]
+        self.assertEqual(cmd, "-thread-info")
+
+    def test_thread_info_specific(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "done", "payload": {
+                "threads": [
+                    {"id": "2", "target-id": "Thread 1234.1235", "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x600", "func": "worker"}},
+                ],
+            }}
+        ]
+        threads = self.session.thread_info(thread_id="2")
+        self.assertEqual(len(threads), 1)
+        cmd = self.mock_ctrl.write.call_args[0][0]
+        self.assertEqual(cmd, "-thread-info 2")
+
+    def test_thread_info_error(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "error", "payload": {"msg": "No threads"}}
+        ]
+        with self.assertRaises(GdbSessionError):
+            self.session.thread_info()
+
+    def test_thread_select(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "done", "payload": {}}
+        ]
+        self.session.thread_select("2")
+        cmd = self.mock_ctrl.write.call_args[0][0]
+        self.assertEqual(cmd, "-thread-select 2")
+
+    def test_thread_select_error(self):
+        self.mock_ctrl.write.return_value = [
+            {"type": "result", "message": "error", "payload": {"msg": "Invalid thread"}}
+        ]
+        with self.assertRaises(GdbSessionError):
+            self.session.thread_select("99")
+
+
 class GdbSessionCloseTests(unittest.TestCase):
     def test_close(self):
         mock_ctrl = MagicMock()

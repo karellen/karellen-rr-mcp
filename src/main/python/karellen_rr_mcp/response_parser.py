@@ -15,7 +15,7 @@
 
 """Parse pygdbmi response dicts into domain types."""
 
-from karellen_rr_mcp.types import Breakpoint, Frame, Variable, StopEvent
+from karellen_rr_mcp.types import Breakpoint, Frame, Variable, StopEvent, ThreadInfo
 
 
 def parse_frame(payload):
@@ -117,6 +117,28 @@ def parse_register_values(response):
     payload = response.get("payload", {}) or {}
     values = payload.get("register-values", [])
     return {v.get("number", ""): v.get("value", "") for v in values}
+
+
+def parse_thread_info(response):
+    """Parse -thread-info response into list of ThreadInfo."""
+    payload = response.get("payload", {}) or {}
+    threads = payload.get("threads", [])
+    current_id = payload.get("current-thread-id")
+    result = []
+    for t in threads:
+        frame = None
+        if "frame" in t:
+            frame = parse_frame(t["frame"])
+        tid = t.get("id", "")
+        result.append(ThreadInfo(
+            id=tid,
+            target_id=t.get("target-id"),
+            name=t.get("name"),
+            state=t.get("state"),
+            frame=frame,
+            current=(tid == current_id),
+        ))
+    return result
 
 
 def find_result_response(responses):

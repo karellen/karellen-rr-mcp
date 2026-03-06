@@ -26,6 +26,8 @@ from karellen_rr_mcp.rr_manager import (
     record as rr_record_cmd,
     list_recordings as rr_list,
     list_processes as rr_ps_cmd,
+    trace_info as rr_trace_info_cmd,
+    remove_recording as rr_rm_cmd,
     ReplayServer, RrError,
 )
 
@@ -223,6 +225,44 @@ def rr_ps(trace_dir: str) -> str:
         return "Error: %s" % e
 
 
+@mcp.tool()
+def rr_traceinfo(trace_dir: str) -> str:
+    """Get trace metadata (header info in JSON format).
+
+    Args:
+        trace_dir: Path to rr trace directory.
+    """
+    try:
+        return rr_trace_info_cmd(trace_dir)
+    except RrError as e:
+        return "Error: %s" % e
+
+
+@mcp.tool()
+def rr_rm(trace_dir: str) -> str:
+    """Remove an rr trace recording.
+
+    Args:
+        trace_dir: Path to rr trace directory to remove.
+    """
+    try:
+        rr_rm_cmd(trace_dir)
+        return "Trace removed: %s" % trace_dir
+    except RrError as e:
+        return "Error: %s" % e
+
+
+@mcp.tool()
+def rr_when() -> str:
+    """Get the current rr event number. Useful for knowing your position in the trace."""
+    try:
+        session = _require_session()
+        output = session.rr_when()
+        return output if output else "Unable to determine current event."
+    except GdbSessionError as e:
+        return "Error: %s" % e
+
+
 # --- Breakpoint Tools ---
 
 @mcp.tool()
@@ -365,6 +405,65 @@ def rr_run_to_event(event_number: int) -> str:
         session = _require_session()
         stop = session.run_to_event(event_number)
         return _format_stop_event(stop)
+    except GdbSessionError as e:
+        return "Error: %s" % e
+
+
+# --- Thread and Frame Tools ---
+
+@mcp.tool()
+def rr_thread_list() -> str:
+    """List all threads in the replayed process with their current state and location."""
+    try:
+        session = _require_session()
+        threads = session.thread_info()
+        if not threads:
+            return "No threads."
+        lines = []
+        for t in threads:
+            marker = "* " if t.current else "  "
+            parts = ["%sThread %s" % (marker, t.id)]
+            if t.target_id:
+                parts.append('"%s"' % t.target_id)
+            if t.name:
+                parts.append("(%s)" % t.name)
+            if t.state:
+                parts.append("[%s]" % t.state)
+            if t.frame:
+                parts.append("at %s" % _format_frame(t.frame))
+            lines.append(" ".join(parts))
+        return "\n".join(lines)
+    except GdbSessionError as e:
+        return "Error: %s" % e
+
+
+@mcp.tool()
+def rr_thread_select(thread_id: str) -> str:
+    """Switch to a different thread.
+
+    Args:
+        thread_id: Thread ID to switch to (from rr_thread_list).
+    """
+    try:
+        session = _require_session()
+        session.thread_select(thread_id)
+        return "Switched to thread %s." % thread_id
+    except GdbSessionError as e:
+        return "Error: %s" % e
+
+
+@mcp.tool()
+def rr_select_frame(frame_level: int) -> str:
+    """Select a stack frame for inspection. After selecting, rr_locals and rr_evaluate
+    operate in the selected frame's context.
+
+    Args:
+        frame_level: Frame number from rr_backtrace (0 = innermost/current).
+    """
+    try:
+        session = _require_session()
+        session.select_frame(frame_level)
+        return "Selected frame #%d." % frame_level
     except GdbSessionError as e:
         return "Error: %s" % e
 

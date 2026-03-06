@@ -70,3 +70,13 @@ class ProcessInfo:
     ppid: Optional[int] = None
     exit_code: Optional[int] = None
     cmd: Optional[str] = None
+
+
+@dataclass
+class ThreadInfo:
+    id: str
+    target_id: Optional[str] = None
+    name: Optional[str] = None
+    state: Optional[str] = None
+    frame: Optional[Frame] = None
+    current: bool = False

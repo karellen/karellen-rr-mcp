@@ -208,7 +208,8 @@ When a crash occurs, re-run the crashing command with `rr_record`, then debug ba
    (SIGSEGV, SIGABRT, etc.) with the crashing frame
 3. **Examine the crash site**: `rr_backtrace()` to see the full call stack,
    `rr_locals()` to see variable values, `rr_evaluate("*ptr")` to inspect the
-   faulting pointer or expression
+   faulting pointer or expression. Use `rr_select_frame(N)` to inspect variables
+   in caller frames without stepping
 4. **Reverse-step to find the root cause**: `rr_next(reverse=True)` or
    `rr_step(reverse=True)` to walk backwards from the crash instruction-by-instruction,
    watching how variables and memory changed
@@ -228,10 +229,14 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 3. **Set breakpoints** at the assertion or where wrong behavior is observed:
    `rr_breakpoint_set("test_function")` or `rr_breakpoint_set("file.c:42")`
 4. **Run forward** to the breakpoint: `rr_continue()`
-5. **Inspect state**: `rr_backtrace()`, `rr_locals()`, `rr_evaluate("expr")`
+5. **Inspect state**: `rr_backtrace()`, `rr_locals()`, `rr_evaluate("expr")`.
+   Use `rr_select_frame(N)` to inspect locals in caller frames. Use `rr_when()`
+   to note event numbers for later `rr_run_to_event()` jumps
 6. **Go backward** to find where state diverged: `rr_continue(reverse=True)`,
    `rr_step(reverse=True)`, `rr_next(reverse=True)`
-7. **Clean up**: `rr_replay_stop()`
+7. **Check other threads**: `rr_thread_list()` to see all threads, then
+   `rr_thread_select(id)` to switch context and inspect their state
+8. **Clean up**: `rr_replay_stop()`, then `rr_rm(trace_dir)` to delete the trace
 
 ### Key Principles
 
@@ -278,6 +283,20 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 - **Checkpoints avoid re-replaying**: save checkpoints at key points with
   `rr_checkpoint_save()` and jump back to them with `rr_checkpoint_restore(id)` instead
   of replaying from the beginning
+- **Use `rr_when()` to track position**: `rr_when()` returns the current event number —
+  note these when you find interesting points so you can jump back with
+  `rr_run_to_event(N)` later without needing a checkpoint
+- **Inspect caller frames without stepping**: after hitting a breakpoint or crash, use
+  `rr_select_frame(N)` (frame numbers from `rr_backtrace()`) to inspect locals and
+  evaluate expressions in any stack frame — no need to reverse-step out of the
+  current function
+- **Debug multi-threaded programs**: use `rr_thread_list()` to see all threads and their
+  current locations, then `rr_thread_select(id)` to switch context. Each thread can be
+  independently inspected with `rr_backtrace()`, `rr_locals()`, etc. rr's deterministic
+  replay makes thread interleavings reproducible
+- **Clean up traces with `rr_rm()`**: after debugging, use `rr_rm(trace_dir)` to remove
+  trace recordings. This is especially important when using project-local `trace_dir`
+  paths to avoid cluttering the project directory
 - **rr has overhead constraints**: rr only supports Linux on x86-64 (and experimentally
   aarch64), does not support programs that use hardware performance counters directly,
   and adds ~1.2x slowdown for CPU-bound code (more for I/O-heavy or syscall-heavy code)
@@ -296,6 +315,9 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 | `rr_replay_stop` | Stop current replay session, clean up. |
 | `rr_list_recordings` | List available rr trace recordings. |
 | `rr_ps` | List processes in a trace recording (PID, PPID, exit code, command). |
+| `rr_traceinfo` | Get trace metadata (header info in JSON format). |
+| `rr_rm` | Remove an rr trace recording. |
+| `rr_when` | Get current rr event number (position in trace). |
 
 ### Breakpoints
 | Tool | Description |
@@ -313,6 +335,13 @@ For non-crash bugs (wrong output, logic errors, test assertion failures):
 | `rr_next` | Step over (forward or reverse). |
 | `rr_finish` | Run to function return (or call site if reverse). |
 | `rr_run_to_event` | Jump to specific rr event number. |
+
+### Thread and Frame Navigation
+| Tool | Description |
+|------|-------------|
+| `rr_thread_list` | List all threads with state and location. |
+| `rr_thread_select` | Switch to a different thread. |
+| `rr_select_frame` | Select a stack frame for inspection (locals/evaluate use that frame). |
 
 ### State Inspection
 | Tool | Description |
