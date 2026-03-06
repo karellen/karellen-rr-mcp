@@ -257,6 +257,31 @@ class GdbSession:
             raise GdbSessionError("Source listing failed: %s" % parser.get_error_message(result))
         return ""
 
+    def select_frame(self, frame_level):
+        cmd = mi.stack_select_frame(frame_level)
+        responses = self._write_until(cmd, timeout_sec=TIMEOUT_EVAL,
+                                      predicate=lambda r: parser.find_result_response(r) is not None)
+        result = parser.find_result_response(responses)
+        if parser.is_error(result):
+            raise GdbSessionError("Frame selection failed: %s" % parser.get_error_message(result))
+
+    def thread_info(self, thread_id=None):
+        cmd = mi.thread_info(thread_id=thread_id)
+        responses = self._write_until(cmd, timeout_sec=TIMEOUT_EVAL,
+                                      predicate=lambda r: parser.find_result_response(r) is not None)
+        result = parser.find_result_response(responses)
+        if parser.is_error(result):
+            raise GdbSessionError("Thread info failed: %s" % parser.get_error_message(result))
+        return parser.parse_thread_info(result)
+
+    def thread_select(self, thread_id):
+        cmd = mi.thread_select(thread_id)
+        responses = self._write_until(cmd, timeout_sec=TIMEOUT_EVAL,
+                                      predicate=lambda r: parser.find_result_response(r) is not None)
+        result = parser.find_result_response(responses)
+        if parser.is_error(result):
+            raise GdbSessionError("Thread select failed: %s" % parser.get_error_message(result))
+
     def rr_when(self):
         cmd = mi.rr_when()
         responses = self._write_until(cmd, timeout_sec=TIMEOUT_EVAL,

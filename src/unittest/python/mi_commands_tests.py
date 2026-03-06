@@ -185,3 +185,30 @@ class CheckpointTests(unittest.TestCase):
 
     def test_checkpoint_restore_different_id(self):
         self.assertEqual(mi.checkpoint_restore(5), '-interpreter-exec console "restart 5"')
+
+
+class StackSelectFrameTests(unittest.TestCase):
+    def test_select_frame_zero(self):
+        self.assertEqual(mi.stack_select_frame(0), "-stack-select-frame 0")
+
+    def test_select_frame_nonzero(self):
+        self.assertEqual(mi.stack_select_frame(3), "-stack-select-frame 3")
+
+
+class ThreadInfoTests(unittest.TestCase):
+    def test_all_threads(self):
+        self.assertEqual(mi.thread_info(), "-thread-info")
+
+    def test_specific_thread(self):
+        self.assertEqual(mi.thread_info(thread_id="2"), "-thread-info 2")
+
+    def test_specific_thread_numeric(self):
+        self.assertEqual(mi.thread_info(thread_id="1"), "-thread-info 1")
+
+
+class ThreadSelectTests(unittest.TestCase):
+    def test_select_thread(self):
+        self.assertEqual(mi.thread_select("1"), "-thread-select 1")
+
+    def test_select_thread_different(self):
+        self.assertEqual(mi.thread_select("3"), "-thread-select 3")

@@ -316,3 +316,59 @@ class GetErrorMessageTests(unittest.TestCase):
 
     def test_none_response(self):
         self.assertEqual(parser.get_error_message(None), "No response received")
+
+
+class ParseThreadInfoTests(unittest.TestCase):
+    def test_multiple_threads(self):
+        response = {
+            "type": "result",
+            "message": "done",
+            "payload": {
+                "threads": [
+                    {"id": "1", "target-id": "Thread 1234.1234", "name": "main",
+                     "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x400500", "func": "foo",
+                               "file": "foo.c", "line": "10"}},
+                    {"id": "2", "target-id": "Thread 1234.1235", "name": "worker",
+                     "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x400600", "func": "bar"}},
+                ],
+                "current-thread-id": "1",
+            },
+        }
+        threads = parser.parse_thread_info(response)
+        self.assertEqual(len(threads), 2)
+        self.assertEqual(threads[0].id, "1")
+        self.assertEqual(threads[0].name, "main")
+        self.assertTrue(threads[0].current)
+        self.assertIsNotNone(threads[0].frame)
+        self.assertEqual(threads[0].frame.function, "foo")
+        self.assertEqual(threads[1].id, "2")
+        self.assertFalse(threads[1].current)
+
+    def test_empty_threads(self):
+        response = {
+            "type": "result",
+            "message": "done",
+            "payload": {"threads": []},
+        }
+        threads = parser.parse_thread_info(response)
+        self.assertEqual(len(threads), 0)
+
+    def test_no_current_thread(self):
+        response = {
+            "type": "result",
+            "message": "done",
+            "payload": {
+                "threads": [
+                    {"id": "1", "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x400500", "func": "main"}},
+                    {"id": "2", "state": "stopped",
+                     "frame": {"level": "0", "addr": "0x400600", "func": "worker"}},
+                ],
+            },
+        }
+        threads = parser.parse_thread_info(response)
+        self.assertEqual(len(threads), 2)
+        self.assertFalse(threads[0].current)
+        self.assertFalse(threads[1].current)

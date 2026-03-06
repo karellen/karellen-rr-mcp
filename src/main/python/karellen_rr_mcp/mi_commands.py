@@ -131,3 +131,17 @@ def checkpoint_save():
 
 def checkpoint_restore(checkpoint_id):
     return '-interpreter-exec console "restart %d"' % checkpoint_id
+
+
+def stack_select_frame(frame_level):
+    return "-stack-select-frame %d" % frame_level
+
+
+def thread_info(thread_id=None):
+    if thread_id is not None:
+        return "-thread-info %s" % thread_id
+    return "-thread-info"
+
+
+def thread_select(thread_id):
+    return "-thread-select %s" % thread_id
