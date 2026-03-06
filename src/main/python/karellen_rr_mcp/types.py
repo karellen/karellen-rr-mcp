@@ -80,3 +80,45 @@ class ThreadInfo:
     state: Optional[str] = None
     frame: Optional[Frame] = None
     current: bool = False
+
+
+@dataclass
+class RecordResult:
+    trace_dir: Optional[str]
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+@dataclass
+class EvalResult:
+    expression: str
+    value: str
+
+
+@dataclass
+class MemoryResult:
+    address: str
+    count: int
+    contents: str
+
+
+@dataclass
+class ReplayStatus:
+    port: int
+    message: str
+
+
+@dataclass
+class StringResult:
+    result: str
+
+
+@dataclass
+class IntResult:
+    result: int
+
+
+@dataclass
+class RegisterValues:
+    registers: dict[str, str]

@@ -16,10 +16,13 @@
 """FastMCP server with tool definitions for rr reverse debugging."""
 
 import atexit
+import functools
 import logging
 import signal
+import traceback
 
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
 
 from karellen_rr_mcp.gdb_session import GdbSession, GdbSessionError
 from karellen_rr_mcp.rr_manager import (
@@ -29,6 +32,11 @@ from karellen_rr_mcp.rr_manager import (
     trace_info as rr_trace_info_cmd,
     remove_recording as rr_rm_cmd,
     ReplayServer, RrError,
+)
+from karellen_rr_mcp.types import (
+    Breakpoint, Frame, StopEvent, Variable, ThreadInfo,
+    ProcessInfo, RecordResult, EvalResult, MemoryResult,
+    ReplayStatus, StringResult, IntResult, RegisterValues,
 )
 
 logger = logging.getLogger(__name__)
@@ -76,48 +84,38 @@ def _require_session():
     return _gdb_session
 
 
-def _format_stop_event(stop):
+def _tag_errors(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except GdbSessionError as e:
+            raise ToolError("gdb: %s" % e) from e
+        except RrError as e:
+            raise ToolError("rr: %s" % e) from e
+        except ToolError:
+            raise
+        except Exception as e:
+            tb = traceback.extract_tb(e.__traceback__)
+            tb_lines = ["%s:%d in %s" % (f.filename, f.lineno, f.name) for f in tb[-3:]]
+            raise ToolError("internal: %s: %s\n  %s" % (
+                type(e).__name__, e, "\n  ".join(tb_lines))) from e
+    return wrapper
+
+
+def _require_stop(stop):
     if stop is None:
-        return "Program stopped (no details available)"
-    parts = ["Stopped: %s" % stop.reason]
-    if stop.frame:
-        f = stop.frame
-        loc = f.function or "??"
-        if f.file and f.line:
-            loc += " at %s:%d" % (f.file, f.line)
-        parts.append("Location: %s" % loc)
-        parts.append("Address: %s" % f.address)
-    if stop.breakpoint_number is not None:
-        parts.append("Breakpoint: #%d" % stop.breakpoint_number)
-    if stop.signal_name:
-        parts.append("Signal: %s (%s)" % (stop.signal_name,
-                                          stop.signal_meaning or ""))
-    return "\n".join(parts)
-
-
-def _format_breakpoint(bp):
-    parts = ["Breakpoint #%d: %s" % (bp.number, bp.location)]
-    if bp.file and bp.line:
-        parts.append("  File: %s:%d" % (bp.file, bp.line))
-    if bp.condition:
-        parts.append("  Condition: %s" % bp.condition)
-    parts.append("  Enabled: %s" % bp.enabled)
-    return "\n".join(parts)
-
-
-def _format_frame(frame):
-    loc = frame.function or "??"
-    if frame.file and frame.line:
-        loc += " at %s:%d" % (frame.file, frame.line)
-    return "#%d  %s  (%s)" % (frame.level, frame.address, loc)
+        raise GdbSessionError("No stop event received")
+    return stop
 
 
 # --- Session Lifecycle Tools ---
 
 @mcp.tool()
+@_tag_errors
 def rr_record(command: list[str], working_directory: str = None,
               env: dict[str, str] = None,
-              trace_dir: str = None) -> str:
+              trace_dir: str = None) -> RecordResult:
     """Record a command with rr. Returns trace directory path.
 
     Args:
@@ -126,25 +124,16 @@ def rr_record(command: list[str], working_directory: str = None,
         env: Optional extra environment variables for the recorded process.
         trace_dir: Output trace directory. If omitted, rr uses its default (~/.local/share/rr/).
     """
-    try:
-        trace_dir, exit_code, stdout, stderr = rr_record_cmd(
-            command, working_directory=working_directory, env=env,
-            trace_dir=trace_dir)
-        parts = ["Recording complete."]
-        if trace_dir:
-            parts.append("Trace directory: %s" % trace_dir)
-        parts.append("Exit code: %d" % exit_code)
-        if stdout.strip():
-            parts.append("--- stdout ---\n%s" % stdout.strip())
-        if stderr.strip():
-            parts.append("--- stderr ---\n%s" % stderr.strip())
-        return "\n".join(parts)
-    except RrError as e:
-        return "Error: %s" % e
+    trace_dir, exit_code, stdout, stderr = rr_record_cmd(
+        command, working_directory=working_directory, env=env,
+        trace_dir=trace_dir)
+    return RecordResult(trace_dir=trace_dir, exit_code=exit_code,
+                        stdout=stdout, stderr=stderr)
 
 
 @mcp.tool()
-def rr_replay_start(trace_dir: str = None, pid: int = None) -> str:
+@_tag_errors
+def rr_replay_start(trace_dir: str = None, pid: int = None) -> ReplayStatus:
     """Start a replay session. Launches rr gdbserver and connects GDB/MI.
 
     Args:
@@ -152,11 +141,12 @@ def rr_replay_start(trace_dir: str = None, pid: int = None) -> str:
         pid: PID of a specific subprocess to replay. Use rr_ps to list available processes.
     """
     global _replay_server, _gdb_session
-    try:
-        if _gdb_session is not None:
-            return "Error: A replay session is already active. Call rr_replay_stop first."
+    if _gdb_session is not None:
+        raise ToolError("gdb: A replay session is already active. Call rr_replay_stop first.")
 
-        server = ReplayServer(trace_dir=trace_dir, pid=pid)
+    server = ReplayServer(trace_dir=trace_dir, pid=pid)
+    session = None
+    try:
         server.start()
 
         session = GdbSession()
@@ -165,109 +155,90 @@ def rr_replay_start(trace_dir: str = None, pid: int = None) -> str:
 
         _replay_server = server
         _gdb_session = session
-        return "Replay session started on port %d. Program is paused at start." % server.port
-    except (RrError, GdbSessionError) as e:
-        # Clean up on failure
+        return ReplayStatus(port=server.port, message="Program is paused at start.")
+    except (RrError, GdbSessionError):
         if session is not None:
             try:
                 session.close()
             except Exception:
                 pass
-        if server is not None:
-            try:
-                server.stop()
-            except Exception:
-                pass
-        return "Error: %s" % e
+        try:
+            server.stop()
+        except Exception:
+            pass
+        raise
 
 
 @mcp.tool()
-def rr_replay_stop() -> str:
+@_tag_errors
+def rr_replay_stop() -> StringResult:
     """Stop the current replay session and clean up."""
     if _gdb_session is None and _replay_server is None:
-        return "No active replay session."
+        return StringResult(result="No active replay session.")
     _cleanup()
-    return "Replay session stopped."
+    return StringResult(result="Replay session stopped.")
 
 
 @mcp.tool()
-def rr_list_recordings(trace_base_dir: str = None) -> str:
+@_tag_errors
+def rr_list_recordings(trace_base_dir: str = None) -> list[str]:
     """List available rr trace recordings.
 
     Args:
         trace_base_dir: Base directory for traces. Defaults to ~/.local/share/rr.
     """
-    recordings = rr_list(trace_base_dir=trace_base_dir)
-    if not recordings:
-        return "No recordings found."
-    return "Available recordings:\n" + "\n".join("  - %s" % r for r in recordings)
+    return rr_list(trace_base_dir=trace_base_dir)
 
 
 @mcp.tool()
-def rr_ps(trace_dir: str) -> str:
+@_tag_errors
+def rr_ps(trace_dir: str) -> list[ProcessInfo]:
     """List processes in an rr trace recording.
 
     Args:
         trace_dir: Path to rr trace directory.
     """
-    try:
-        processes = rr_ps_cmd(trace_dir)
-        if not processes:
-            return "No processes found in recording."
-        lines = ["PID\tPPID\tEXIT\tCMD"]
-        for p in processes:
-            ppid = str(p.ppid) if p.ppid is not None else "--"
-            exit_code = str(p.exit_code) if p.exit_code is not None else "--"
-            cmd = p.cmd or ""
-            lines.append("%d\t%s\t%s\t%s" % (p.pid, ppid, exit_code, cmd))
-        return "\n".join(lines)
-    except RrError as e:
-        return "Error: %s" % e
+    return rr_ps_cmd(trace_dir)
 
 
 @mcp.tool()
-def rr_traceinfo(trace_dir: str) -> str:
+@_tag_errors
+def rr_traceinfo(trace_dir: str) -> StringResult:
     """Get trace metadata (header info in JSON format).
 
     Args:
         trace_dir: Path to rr trace directory.
     """
-    try:
-        return rr_trace_info_cmd(trace_dir)
-    except RrError as e:
-        return "Error: %s" % e
+    return StringResult(result=rr_trace_info_cmd(trace_dir))
 
 
 @mcp.tool()
-def rr_rm(trace_dir: str) -> str:
+@_tag_errors
+def rr_rm(trace_dir: str) -> StringResult:
     """Remove an rr trace recording.
 
     Args:
         trace_dir: Path to rr trace directory to remove.
     """
-    try:
-        rr_rm_cmd(trace_dir)
-        return "Trace removed: %s" % trace_dir
-    except RrError as e:
-        return "Error: %s" % e
+    rr_rm_cmd(trace_dir)
+    return StringResult(result="Trace removed: %s" % trace_dir)
 
 
 @mcp.tool()
-def rr_when() -> str:
+@_tag_errors
+def rr_when() -> StringResult:
     """Get the current rr event number. Useful for knowing your position in the trace."""
-    try:
-        session = _require_session()
-        output = session.rr_when()
-        return output if output else "Unable to determine current event."
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    output = session.rr_when()
+    return StringResult(result=output if output else "Unable to determine current event.")
 
 
 # --- Breakpoint Tools ---
 
 @mcp.tool()
+@_tag_errors
 def rr_breakpoint_set(location: str, condition: str = None,
-                      temporary: bool = False) -> str:
+                      temporary: bool = False) -> Breakpoint:
     """Set a breakpoint at a function, file:line, or address.
 
     Args:
@@ -275,288 +246,214 @@ def rr_breakpoint_set(location: str, condition: str = None,
         condition: Optional condition expression (e.g. "i > 10").
         temporary: If true, breakpoint is deleted after first hit.
     """
-    try:
-        session = _require_session()
-        bp = session.breakpoint_set(location, condition=condition, temporary=temporary)
-        return _format_breakpoint(bp)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return session.breakpoint_set(location, condition=condition, temporary=temporary)
 
 
 @mcp.tool()
-def rr_breakpoint_remove(breakpoint_number: int) -> str:
+@_tag_errors
+def rr_breakpoint_remove(breakpoint_number: int) -> IntResult:
     """Remove a breakpoint by its number.
 
     Args:
         breakpoint_number: The breakpoint number to remove.
     """
-    try:
-        session = _require_session()
-        session.breakpoint_delete(breakpoint_number)
-        return "Breakpoint #%d removed." % breakpoint_number
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    session.breakpoint_delete(breakpoint_number)
+    return IntResult(result=breakpoint_number)
 
 
 @mcp.tool()
-def rr_breakpoint_list() -> str:
+@_tag_errors
+def rr_breakpoint_list() -> list[Breakpoint]:
     """List all breakpoints."""
-    try:
-        session = _require_session()
-        bps = session.breakpoint_list()
-        if not bps:
-            return "No breakpoints set."
-        return "\n\n".join(_format_breakpoint(bp) for bp in bps)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return session.breakpoint_list()
 
 
 @mcp.tool()
+@_tag_errors
 def rr_watchpoint_set(expression: str,
-                      access_type: str = "write") -> str:
+                      access_type: str = "write") -> Breakpoint:
     """Set a hardware watchpoint on a variable or expression.
 
     Args:
         expression: Expression to watch (e.g. "my_var", "*0x601050").
         access_type: One of "write", "read", or "access".
     """
-    try:
-        session = _require_session()
-        wp = session.watchpoint_set(expression, access_type=access_type)
-        if wp:
-            return _format_breakpoint(wp)
-        return "Watchpoint set on %s (%s)" % (expression, access_type)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    wp = session.watchpoint_set(expression, access_type=access_type)
+    if wp is None:
+        raise GdbSessionError("Failed to parse watchpoint response")
+    return wp
 
 
 # --- Execution Control Tools ---
 
 @mcp.tool()
-def rr_continue(reverse: bool = False) -> str:
+@_tag_errors
+def rr_continue(reverse: bool = False) -> StopEvent:
     """Continue execution forward or backward until breakpoint/signal/end.
 
     Args:
         reverse: If true, continue backward (reverse execution).
     """
-    try:
-        session = _require_session()
-        stop = session.continue_execution(reverse=reverse)
-        return _format_stop_event(stop)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return _require_stop(session.continue_execution(reverse=reverse))
 
 
 @mcp.tool()
-def rr_step(count: int = 1, reverse: bool = False) -> str:
+@_tag_errors
+def rr_step(count: int = 1, reverse: bool = False) -> StopEvent:
     """Step into (source-level) forward or reverse.
 
     Args:
         count: Number of steps (forward only).
         reverse: If true, step backward.
     """
-    try:
-        session = _require_session()
-        stop = session.step(count=count, reverse=reverse)
-        return _format_stop_event(stop)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return _require_stop(session.step(count=count, reverse=reverse))
 
 
 @mcp.tool()
-def rr_next(count: int = 1, reverse: bool = False) -> str:
+@_tag_errors
+def rr_next(count: int = 1, reverse: bool = False) -> StopEvent:
     """Step over (source-level) forward or reverse.
 
     Args:
         count: Number of steps (forward only).
         reverse: If true, step backward.
     """
-    try:
-        session = _require_session()
-        stop = session.next(count=count, reverse=reverse)
-        return _format_stop_event(stop)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return _require_stop(session.next(count=count, reverse=reverse))
 
 
 @mcp.tool()
-def rr_finish(reverse: bool = False) -> str:
+@_tag_errors
+def rr_finish(reverse: bool = False) -> StopEvent:
     """Run to function return (or to call site if reverse).
 
     Args:
         reverse: If true, run backward to the call site.
     """
-    try:
-        session = _require_session()
-        stop = session.finish(reverse=reverse)
-        return _format_stop_event(stop)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return _require_stop(session.finish(reverse=reverse))
 
 
 @mcp.tool()
-def rr_run_to_event(event_number: int) -> str:
+@_tag_errors
+def rr_run_to_event(event_number: int) -> StopEvent:
     """Jump to a specific rr event number.
 
     Args:
         event_number: The rr event number to seek to.
     """
-    try:
-        session = _require_session()
-        stop = session.run_to_event(event_number)
-        return _format_stop_event(stop)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return _require_stop(session.run_to_event(event_number))
 
 
 # --- Thread and Frame Tools ---
 
 @mcp.tool()
-def rr_thread_list() -> str:
+@_tag_errors
+def rr_thread_list() -> list[ThreadInfo]:
     """List all threads in the replayed process with their current state and location."""
-    try:
-        session = _require_session()
-        threads = session.thread_info()
-        if not threads:
-            return "No threads."
-        lines = []
-        for t in threads:
-            marker = "* " if t.current else "  "
-            parts = ["%sThread %s" % (marker, t.id)]
-            if t.target_id:
-                parts.append('"%s"' % t.target_id)
-            if t.name:
-                parts.append("(%s)" % t.name)
-            if t.state:
-                parts.append("[%s]" % t.state)
-            if t.frame:
-                parts.append("at %s" % _format_frame(t.frame))
-            lines.append(" ".join(parts))
-        return "\n".join(lines)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return session.thread_info()
 
 
 @mcp.tool()
-def rr_thread_select(thread_id: str) -> str:
+@_tag_errors
+def rr_thread_select(thread_id: str) -> IntResult:
     """Switch to a different thread.
 
     Args:
         thread_id: Thread ID to switch to (from rr_thread_list).
     """
-    try:
-        session = _require_session()
-        session.thread_select(thread_id)
-        return "Switched to thread %s." % thread_id
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    session.thread_select(thread_id)
+    return IntResult(result=int(thread_id))
 
 
 @mcp.tool()
-def rr_select_frame(frame_level: int) -> str:
+@_tag_errors
+def rr_select_frame(frame_level: int) -> IntResult:
     """Select a stack frame for inspection. After selecting, rr_locals and rr_evaluate
     operate in the selected frame's context.
 
     Args:
         frame_level: Frame number from rr_backtrace (0 = innermost/current).
     """
-    try:
-        session = _require_session()
-        session.select_frame(frame_level)
-        return "Selected frame #%d." % frame_level
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    session.select_frame(frame_level)
+    return IntResult(result=frame_level)
 
 
 # --- State Inspection Tools ---
 
 @mcp.tool()
-def rr_backtrace(max_depth: int = None) -> str:
+@_tag_errors
+def rr_backtrace(max_depth: int = None) -> list[Frame]:
     """Get the call stack (backtrace).
 
     Args:
         max_depth: Maximum number of frames to return.
     """
-    try:
-        session = _require_session()
-        frames = session.backtrace(max_depth=max_depth)
-        if not frames:
-            return "No stack frames."
-        return "\n".join(_format_frame(f) for f in frames)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return session.backtrace(max_depth=max_depth)
 
 
 @mcp.tool()
-def rr_evaluate(expression: str) -> str:
+@_tag_errors
+def rr_evaluate(expression: str) -> EvalResult:
     """Evaluate a C/C++ expression in the current context.
 
     Args:
         expression: Expression to evaluate (e.g. "x + 1", "sizeof(struct foo)").
     """
-    try:
-        session = _require_session()
-        value = session.evaluate(expression)
-        return "%s = %s" % (expression, value)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    value = session.evaluate(expression)
+    return EvalResult(expression=expression, value=value)
 
 
 @mcp.tool()
-def rr_locals() -> str:
+@_tag_errors
+def rr_locals() -> list[Variable]:
     """List local variables with their current values."""
-    try:
-        session = _require_session()
-        variables = session.locals()
-        if not variables:
-            return "No local variables."
-        lines = []
-        for v in variables:
-            line = "%s = %s" % (v.name, v.value)
-            if v.type:
-                line += "  (%s)" % v.type
-            lines.append(line)
-        return "\n".join(lines)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return session.locals()
 
 
 @mcp.tool()
-def rr_read_memory(address: str, count: int = 64) -> str:
+@_tag_errors
+def rr_read_memory(address: str, count: int = 64) -> MemoryResult:
     """Read raw memory bytes at an address.
 
     Args:
         address: Memory address to read (e.g. "0x7ffd1234").
         count: Number of bytes to read (default 64).
     """
-    try:
-        session = _require_session()
-        hex_bytes = session.read_memory(address, count=count)
-        return "Memory at %s (%d bytes): %s" % (address, count, hex_bytes)
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    hex_bytes = session.read_memory(address, count=count)
+    return MemoryResult(address=address, count=count, contents=hex_bytes)
 
 
 @mcp.tool()
-def rr_registers(register_names: list[str] = None) -> str:
+@_tag_errors
+def rr_registers(register_names: list[str] = None) -> RegisterValues:
     """Read CPU registers.
 
     Args:
         register_names: Specific register names to read. If omitted, reads all.
     """
-    try:
-        session = _require_session()
-        regs = session.registers(register_names=register_names)
-        if not regs:
-            return "No register values."
-        return "\n".join("  %s = %s" % (k, v) for k, v in regs.items())
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    return RegisterValues(registers=session.registers(register_names=register_names))
 
 
 @mcp.tool()
+@_tag_errors
 def rr_source_lines(file: str = None, line: int = None,
-                    count: int = 10) -> str:
+                    count: int = 10) -> StringResult:
     """List source code around current position or a specific location.
 
     Args:
@@ -564,42 +461,35 @@ def rr_source_lines(file: str = None, line: int = None,
         line: Line number. If omitted, uses current position.
         count: Number of lines to show (default 10).
     """
-    try:
-        session = _require_session()
-        src = session.source_lines(file=file, line=line, count=count)
-        return src if src else "No source available."
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    src = session.source_lines(file=file, line=line, count=count)
+    return StringResult(result=src if src else "No source available.")
 
 
 # --- Checkpoint Tools ---
 
 @mcp.tool()
-def rr_checkpoint_save() -> str:
+@_tag_errors
+def rr_checkpoint_save() -> StringResult:
     """Save a checkpoint at the current position. Returns checkpoint info."""
-    try:
-        session = _require_session()
-        output = session.checkpoint_save()
-        return output if output else "Checkpoint saved."
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    output = session.checkpoint_save()
+    return StringResult(result=output if output else "Checkpoint saved.")
 
 
 @mcp.tool()
-def rr_checkpoint_restore(checkpoint_id: int) -> str:
+@_tag_errors
+def rr_checkpoint_restore(checkpoint_id: int) -> StopEvent:
     """Restore to a previously saved checkpoint.
 
     Args:
         checkpoint_id: The checkpoint ID to restore.
     """
-    try:
-        session = _require_session()
-        result = session.checkpoint_restore(checkpoint_id)
-        if hasattr(result, "reason"):
-            return _format_stop_event(result)
-        return str(result) if result else "Checkpoint %d restored." % checkpoint_id
-    except GdbSessionError as e:
-        return "Error: %s" % e
+    session = _require_session()
+    result = session.checkpoint_restore(checkpoint_id)
+    if isinstance(result, StopEvent):
+        return result
+    raise GdbSessionError("No stop event after checkpoint restore")
 
 
 def main():
