@@ -85,7 +85,33 @@ pipx install karellen-rr-mcp
 
 ## Claude Code Integration
 
-### Configure the MCP server
+### Claude Code plugin (recommended)
+
+The plugin automatically configures the MCP server and includes:
+
+- **Crash detection hook** that suggests rr when a Bash command exits with a signal
+  (SIGSEGV, SIGABRT, SIGBUS, etc.) or output contains crash/sanitizer signatures
+- **`/karellen-rr-mcp:rr-debug` skill** that walks through the full
+  record-replay-analyze workflow step by step
+- **`rr-investigator` agent** that Claude can spawn to autonomously investigate
+  crashes using rr reverse execution
+
+Install the plugin from a marketplace:
+
+```bash
+claude plugin install karellen-rr-mcp@<marketplace>
+```
+
+Or load directly from a local checkout for testing:
+
+```bash
+claude --plugin-dir /path/to/karellen-rr-mcp
+```
+
+### Manual MCP server configuration
+
+If you prefer not to use the plugin, you can configure the MCP server directly.
+This gives you the MCP tools but not the skill, agent, or crash detection hook.
 
 Using the CLI:
 
@@ -129,115 +155,27 @@ or manually:
 
 ### Auto-approve rr tools
 
-By default Claude Code will prompt for confirmation before each `rr_*` tool call. To
-auto-approve all tools from this server, add a permission rule to your user settings
+By default Claude Code will prompt for confirmation before each `rr_*` tool call.
+You can approve individually by selecting "Yes, and don't ask again" when prompted.
+
+To auto-approve all tools upfront, add a permission rule to your user settings
 (`~/.claude/settings.json`):
 
 ```json
 {
   "permissions": {
     "allow": [
+      "mcp__plugin_karellen-rr-mcp_karellen-rr-mcp__*",
       "mcp__karellen-rr-mcp__*"
     ]
   }
 }
 ```
 
+The first rule covers plugin-loaded tools, the second covers manual MCP configuration.
+
 Or for a project-scoped setting, add the same rule to `.claude/settings.json` in your
 project root (this file can be committed to version control so all team members get it).
-
-### Teach Claude the debugging workflow
-
-Claude will automatically discover all `rr_*` tools, but to teach it **when and how** to
-use them effectively, add the following to your project's `CLAUDE.md`:
-
-````markdown
-## Reverse Debugging with rr
-
-### When to Use rr
-
-Run tests and code normally. When you encounter a crash, segfault, test failure, or bug,
-first check the relevant source code — if the fix is apparent without deep or broad
-searches, just fix it directly. But if the cause isn't obvious after an initial look,
-**switch to rr** rather than continuing to read through layers of code:
-
-```
-rr_record(command=["make", "test"])
-rr_record(command=["./failing_test"])
-rr_record(command=["ctest", "--test-dir", "build"], working_directory="/path/to/project")
-rr_record(command=["./my_test"], trace_dir="/tmp/my-trace")
-```
-
-Keep the record-replay-debug cycle going until all problems are resolved. rr captures
-the full execution deterministically, so the failure is replayed exactly as it happened.
-
-rr is not just for crashes and race conditions — use it for any bug where you would
-otherwise need to trace execution through multiple functions or files. Stepping through
-actual execution in the debugger is faster and more reliable than extensive static
-analysis.
-
-### Debugging Multi-Process Recordings
-
-When rr records a process that spawns children (e.g. a test harness that launches a
-server), all subprocesses are captured in the trace. By default, `rr_replay_start()`
-replays the root process — which is typically the test harness (e.g. a shell, Python,
-Perl, or CTest wrapper), not the program you care about. **You must identify and select
-the correct subprocess.**
-
-1. **List processes**: `rr_ps(trace_dir="/path/to/trace")` — shows PID, PPID, exit code,
-   and command for every process in the recording
-2. **Find the right process**: look for the actual program binary in the command column,
-   and use exit codes to identify the crashing process — negative exit codes indicate
-   signals (e.g. -11 = SIGSEGV, -6 = SIGABRT), non-zero codes indicate failures
-3. **Start replay of that process**:
-   `rr_replay_start(trace_dir="/path/to/trace", pid=<pid>)` — replays only that
-   subprocess
-4. Debug as usual with breakpoints, reverse execution, etc.
-
-**Always use the `pid` parameter** when replaying test harness recordings. Without it,
-rr replays the harness process which lacks the program's debug symbols and is not where
-the bug occurred.
-
-### Debugging Workflow
-
-1. **Record**: `rr_record(command=["./failing_test"])`
-2. **Start replay**: `rr_replay_start()`
-3. **Navigate forward to the bug**: for crashes, `rr_continue()` stops at the signal
-   automatically. For logic bugs, set breakpoints first with `rr_breakpoint_set()` then
-   `rr_continue()`
-4. **Examine state**: `rr_backtrace()`, `rr_locals()`, `rr_evaluate("expr")`. Use
-   `rr_select_frame(N)` to inspect caller frames without stepping
-5. **Work backwards to the root cause**: `rr_next(reverse=True)` or
-   `rr_step(reverse=True)` to walk backwards. If a variable was corrupted, use
-   `rr_watchpoint_set("var")` then `rr_continue(reverse=True)` to find the exact write
-6. **Use checkpoints for navigation**: `rr_checkpoint_save()` at interesting points,
-   `rr_checkpoint_restore(id)` to jump back. Use `rr_when()` to note event numbers
-   for `rr_run_to_event(N)` jumps
-7. **Check other threads**: `rr_thread_list()` then `rr_thread_select(id)` to switch
-   context and inspect their state
-8. **Clean up**: `rr_replay_stop()`, then `rr_rm(trace_dir)` to delete the trace
-
-### Key Rules
-
-- **Never modify source to debug**: rr gives full access to program state at every point
-  in execution — no need for debug prints, trace output, or conditional breakpoints
-- **Work backwards from symptoms**: go forward to where the bug manifests, then reverse
-  to find the cause
-- **Build with debug symbols**: compile with `-g` (and preferably `-O0` or `-Og`) for
-  full source-level information during replay
-- **Always use `trace_dir` with a random path in the project directory**: generate a
-  random directory name (e.g. `rr-trace-<random>`) and pass it as `trace_dir` to
-  `rr_record`. This avoids accumulating traces in `~/.local/share/rr/` and keeps traces
-  within Claude Code's default permission scope. **Important**: the directory must NOT
-  already exist — rr refuses to record into an existing directory
-- **Conditional breakpoints narrow the search**: use
-  `rr_breakpoint_set("file.c:100", condition="i == 42")` to stop only when specific
-  conditions hold
-- **Environment variables in recording**: pass `env={"MALLOC_CHECK_": "3"}` or similar
-  to `rr_record` to enable additional runtime checks that may surface bugs earlier
-- **Clean up traces with `rr_rm()`**: especially important when using project-local
-  `trace_dir` paths to avoid cluttering the project directory
-````
 
 ## Available Tools
 
