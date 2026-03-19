@@ -96,10 +96,17 @@ The plugin automatically configures the MCP server and includes:
 - **`rr-investigator` agent** that Claude can spawn to autonomously investigate
   crashes using rr reverse execution
 
-Install the plugin from a marketplace:
+From the [Karellen plugins marketplace](https://github.com/karellen/claude-plugins):
 
 ```bash
-claude plugin install karellen-rr-mcp@<marketplace>
+claude plugin marketplace add karellen/claude-plugins
+claude plugin install karellen-rr-mcp@karellen-plugins
+```
+
+Or from the official Anthropic marketplace (if accepted):
+
+```bash
+claude plugin install karellen-rr-mcp@claude-plugins-official
 ```
 
 Or load directly from a local checkout for testing:
