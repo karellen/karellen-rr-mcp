@@ -20,6 +20,7 @@ use_plugin("python.unittest")
 use_plugin("python.flake8")
 use_plugin("python.coverage")
 use_plugin("python.coveralls")
+use_plugin("copy_resources")
 use_plugin("python.distutils")
 
 name = "karellen-rr-mcp"
@@ -32,6 +33,7 @@ url = "https://github.com/karellen/karellen-rr-mcp"
 urls = {
     "Bug Tracker": "https://github.com/karellen/karellen-rr-mcp/issues",
     "Source Code": "https://github.com/karellen/karellen-rr-mcp/",
+    "Privacy Policy": "https://github.com/karellen/karellen-rr-mcp/blob/master/PRIVACY.md",
 }
 license = "Apache-2.0"
 
@@ -59,6 +61,10 @@ def set_properties(project):
     project.set_property("distutils_console_scripts", ["karellen-rr-mcp = karellen_rr_mcp.server:main"])
     project.set_property("distutils_setup_keywords", ["rr", "reverse-debugging", "gdb", "mcp",
                                                           "model-context-protocol"])
+
+    project.set_property("copy_resources_target", "$dir_dist/karellen_rr_mcp")
+    project.get_property("copy_resources_glob").append("PRIVACY.md")
+    project.include_file("karellen_rr_mcp", "PRIVACY.md")
 
     project.set_property("distutils_classifiers", [
         "Programming Language :: Python :: 3.10",
