@@ -1,6 +1,6 @@
 {
   "name": "karellen-rr-mcp",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "rr reverse debugging for Claude Code via MCP - record, replay, and debug program executions with full forward and reverse control",
   "author": {
     "name": "Karellen, Inc.",
