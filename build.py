@@ -47,6 +47,8 @@ def set_properties(project):
     project.depends_on("mcp")
     project.depends_on("pygdbmi")
 
+    project.depends_on("karellen-rr", extra="rr")
+
     project.set_property("coverage_break_build", False)
 
     project.set_property("flake8_break_build", True)

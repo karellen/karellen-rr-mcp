@@ -31,6 +31,14 @@ GDB/MI, inspecting program state without modifying source code.
 
 ### Installing rr and GDB
 
+**Via pip** (using [karellen-rr](https://github.com/karellen/karellen-rr)):
+```bash
+pip install karellen-rr-mcp[rr]
+```
+
+This installs rr as a pip package alongside karellen-rr-mcp. GDB must still be installed
+separately via your system package manager.
+
 **Fedora / RHEL / CentOS:**
 ```bash
 sudo dnf install rr gdb
