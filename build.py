@@ -24,7 +24,7 @@ use_plugin("copy_resources")
 use_plugin("python.distutils")
 
 name = "karellen-rr-mcp"
-version = "0.2.4"
+version = "0.2.5.dev"
 
 summary = "MCP Server for rr Reverse Debugging"
 authors = [Author("Karellen, Inc.", "supervisor@karellen.co")]
