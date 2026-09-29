@@ -13,17 +13,19 @@
 #   See the License for the specific language governing permissions and
 #   limitations under the License.
 
-"""FastMCP server with tool definitions for rr reverse debugging."""
+"""MCP server with tool definitions for rr reverse debugging."""
 
 import atexit
 import functools
 import logging
 import os
 import signal
+import threading
 import traceback
+from importlib.metadata import PackageNotFoundError, version
 
-from mcp.server.fastmcp import FastMCP
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from karellen_rr_mcp.gdb_session import GdbSession, GdbSessionError
 from karellen_rr_mcp.rr_manager import (
@@ -42,15 +44,24 @@ from karellen_rr_mcp.types import (
 
 logger = logging.getLogger(__name__)
 
-mcp = FastMCP("karellen-rr-mcp", instructions=(
+try:
+    _version = version("karellen-rr-mcp")
+except PackageNotFoundError:
+    _version = ""
+
+mcp = MCPServer("karellen-rr-mcp", instructions=(
     "rr reverse debugging server. Use rr_record to record a failing test, "
     "rr_replay_start to begin debugging, then use execution control and "
     "inspection tools to investigate. Use reverse=True to go backwards."
-))
+), version=_version)
 
 # Module-level singleton session state
 _replay_server = None
 _gdb_session = None
+
+# The SDK runs sync tools on worker threads, but the session state above is not
+# thread-safe, so every tool call is serialized through this lock.
+_session_lock = threading.RLock()
 
 
 def _cleanup():
@@ -91,7 +102,8 @@ def _tag_errors(fn):
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
         try:
-            return fn(*args, **kwargs)
+            with _session_lock:
+                return fn(*args, **kwargs)
         except GdbSessionError as e:
             raise ToolError("gdb: %s" % e) from e
         except RrError as e:

@@ -16,7 +16,7 @@
 import unittest
 from unittest.mock import patch, MagicMock
 
-from mcp.server.fastmcp.exceptions import ToolError
+from mcp.server.mcpserver.exceptions import ToolError
 
 from karellen_rr_mcp.gdb_session import GdbSessionError
 from karellen_rr_mcp.rr_manager import RrError
