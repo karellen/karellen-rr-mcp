@@ -44,7 +44,7 @@ default_task = ["analyze", "publish"]
 
 @init
 def set_properties(project):
-    project.depends_on("mcp")
+    project.depends_on("mcp", ">=2.2,<3")
     project.depends_on("pygdbmi")
 
     project.depends_on("karellen-rr", extra="rr")

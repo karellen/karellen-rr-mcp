@@ -22,7 +22,9 @@ Run a single test module by overriding the `unittest_module_glob` property:
 pyb run_unit_tests -P unittest_module_glob=mi_commands_tests
 ```
 
-Tests live in `src/unittest/python/*_tests.py` and use `unittest` with `unittest.mock`.
+Tests live in `src/unittest/python/*_tests.py` and use `unittest` with `unittest.mock`. Most tests call tool functions directly; `mcp_protocol_tests.py` drives the server through a real MCP `Client` (in-process and over a stdio subprocess) to cover protocol negotiation, tool listing, and tool-call serialization.
+
+If `karellen-rr-mcp` (and therefore `mcp`) is installed in the user site-packages (`pip install --user`), run `pyb` from a dedicated virtualenv rather than the user-site `pyb`: PyBuilder keeps user-site paths ahead of the build venv in the test subprocess, so tests silently import the user-site `mcp` instead of the pinned one.
 
 ## Lint
 
@@ -37,7 +39,7 @@ Two-process model per debugging session:
 
 Module responsibilities:
 
-- **`server.py`** -- FastMCP server definition, all `@mcp.tool()` endpoints, module-level singleton session state (`_replay_server`, `_gdb_session`), cleanup/signal handling, and `main()` entry point. The `_tag_errors` decorator converts all exceptions to `ToolError` with prefixed messages (`gdb:`, `rr:`, `internal:`).
+- **`server.py`** -- `MCPServer` (MCP Python SDK v2) definition, all `@mcp.tool()` endpoints, module-level singleton session state (`_replay_server`, `_gdb_session`), cleanup/signal handling, and `main()` entry point. The `_tag_errors` decorator converts all exceptions to `ToolError` with prefixed messages (`gdb:`, `rr:`, `internal:`), and holds `_session_lock` for the duration of every tool call: SDK v2 runs sync tools on worker threads, and the singleton session state is not thread-safe.
 - **`rr_manager.py`** -- Subprocess lifecycle: `record()` runs `rr record`, `ReplayServer` starts/stops `rr replay` gdbserver, helper functions for `rr ps`, `rr traceinfo`, `rr rm`, listing traces. Port allocation via ephemeral socket binding.
 - **`gdb_session.py`** -- Wraps pygdbmi `GdbController`. `_write_until()` is the core I/O loop: sends a GDB/MI command and keeps reading responses until a predicate is satisfied or deadline expires. All timeouts are configurable via `RR_MCP_TIMEOUT_*` environment variables.
 - **`mi_commands.py`** -- Pure functions returning GDB/MI command strings. Reverse execution uses CLI commands (`rc`, `reverse-step`, etc.) because MI has no reverse equivalents. `rr_when`, `rr_seek`, `checkpoint_save/restore` use `-interpreter-exec console`.
