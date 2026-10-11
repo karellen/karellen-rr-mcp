@@ -23,7 +23,7 @@ GDB/MI, inspecting program state without modifying source code.
 - **Linux** on x86-64 (rr only supports Linux; aarch64 is experimental)
 - **[rr](https://rr-project.org/)** installed and on PATH
 - **[GDB](https://www.sourceware.org/gdb/)** installed and on PATH (used by rr for debugging)
-- **Python** >= 3.10
+- **Python** >= 3.11
 - **`perf_event_paranoid`** set to `1` to allow recording:
   ```bash
   sudo sysctl kernel.perf_event_paranoid=1
